@@ -2,6 +2,8 @@
 P站的爬虫程序
 
 目前只支持关键词搜索，以及r18和点赞数选项
+
+如果你想了解该爬虫的设计思路，代码详解，可以参考我的博客：[基于Java的Pixiv.net（P站）爬虫](https://blog.csdn.net/coder_dai/article/details/81482712)
 ## 使用方法
 ### 1.配置参数
 打开Constants.java
