@@ -19,6 +19,7 @@ import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
+import org.springframework.util.StringUtils;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -30,6 +31,7 @@ import java.util.List;
 
 public class PixivClient {
 
+    private static int filtedCount = 0;
     private static HttpGet get;
     private static HttpPost post;
     private static CookieStore cookieStore;
@@ -75,7 +77,6 @@ public class PixivClient {
 
     /**
      * 登录
-     *
      */
     public static void login() {
         String post_keyStr = preLogin();
@@ -99,6 +100,7 @@ public class PixivClient {
             if (responseJsonBody.containsKey("success")) {
                 System.out.println("登录成功");
             } else {
+                System.out.println(responseJsonBody.get("validation_errors"));
                 throw new Exception("登录失败");
             }
         } catch (Exception e) {
@@ -121,15 +123,16 @@ public class PixivClient {
         int i = 1;
         boolean hasNextPage = true;
         while (hasNextPage) {
-            i++;
             String responseContent = getPage(buildSearchUrl(Constants.KEY_WORD, Constants.IS_R18, i));
-            parseSearchResult(responseContent, Constants.STARS);
+            parseSearchResult(responseContent);
             hasNextPage = hasNextPage(responseContent);
+            i++;
         }
     }
 
     /**
      * 发送HTTP/HTTPS请求并返回整个网页
+     *
      * @param url
      * @return
      */
@@ -142,6 +145,7 @@ public class PixivClient {
         ) {
             response = client.execute(get);
             responseContent = EntityUtils.toString(response.getEntity());
+            System.out.println("responseContent:" + responseContent);
         } catch (Exception e) {
             e.printStackTrace();
         } finally {
@@ -158,62 +162,66 @@ public class PixivClient {
 
     /**
      * 解析搜索请求返回的结果
+     *
      * @param responseContent
-     * @param stars
      */
-    public static void parseSearchResult(String responseContent, int stars) {
+    public static void parseSearchResult(String responseContent) {
         Document doc = Jsoup.parse(responseContent);
         Element dataListElement = doc.select("#js-mount-point-search-result-list").get(0);
+        System.out.println("dataListElement:"+dataListElement);
         JSONArray myJsonArray = (JSONArray) JSONArray.parse(dataListElement.attr("data-items"));
         myJsonArray.forEach((Object json) -> {
             JSONObject jsonObject = (JSONObject) json;
             System.out.println("data-item:" + jsonObject.toJSONString());
-            String illustTitle = jsonObject.getString("illustTitle");
-            int bookmarkCount = jsonObject.getInteger("bookmarkCount");
-            String illustType = jsonObject.getString("illustType");
-            int pageCount = jsonObject.getInteger("pageCount");
-            String illustId = jsonObject.getString("illustId");
-            //点赞数过滤
-            if (bookmarkCount > stars) {
-                //作品为图片
-                if (illustType.equals("0")) {
-                    //创建文件夹（文件名不能有空格）
-                    illustTitle.replaceAll(" ","_");
-                    String directoryPath = illustTitle + "_stars_" + bookmarkCount;
-                    makeDirectory(directoryPath);
-                    //只有一张图，访问图片主页
-                    if (pageCount == 1) {
-                        String mediumContent = (getPage(Constants.PIXIV_ILLUST_MEDIUM_URL + illustId));
-                        //解析网页中的js脚本，过滤出大图的url
-                        Document mangaDoc = Jsoup.parse(mediumContent);
-                        Elements mangaElements = mangaDoc.getElementsByTag("script");
-                        for (Element element : mangaElements) {
-                            String data = element.data();
-                            //包含所需数据的script标签以以下内容开头，其他忽略
-                            if(data.startsWith("'use strict';var globalInitData")) {
-                                String imgUrl = data.substring(data.indexOf("regular")+10, data.indexOf("original")-3).replaceAll("\\\\", "");
-                                imgDownload(imgUrl, directoryPath + "/" + illustId + "_" + "0");
+            if (StringUtils.isEmpty(jsonObject.getBoolean("isAdContainer")) || !jsonObject.getBoolean("isAdContainer")) {
+                String illustTitle = jsonObject.getString("illustTitle");
+                int bookmarkCount = jsonObject.getInteger("bookmarkCount");
+                String illustType = jsonObject.getString("illustType");
+                int pageCount = jsonObject.getInteger("pageCount");
+                String illustId = jsonObject.getString("illustId");
+                //点赞数过滤
+                if (bookmarkCount > Constants.STARS) {
+                    filtedCount++;
+                    //作品为图片
+                    if (illustType.equals("0")) {
+                        //创建文件夹（文件名不能有空格）
+                        illustTitle.replaceAll(" ", "_");
+                        String directoryPath = illustTitle + "_stars_" + bookmarkCount;
+                        makeDirectory(directoryPath);
+                        //只有一张图，访问图片主页
+                        if (pageCount == 1) {
+                            String mediumContent = (getPage(Constants.PIXIV_ILLUST_MEDIUM_URL + illustId));
+                            //解析网页中的js脚本，过滤出大图的url
+                            Document mangaDoc = Jsoup.parse(mediumContent);
+                            Elements mangaElements = mangaDoc.getElementsByTag("script");
+                            for (Element element : mangaElements) {
+                                String data = element.data();
+                                //包含所需数据的script标签以以下内容开头，其他忽略
+                                if (data.startsWith("'use strict';var globalInitData")) {
+                                    String imgUrl = data.substring(data.indexOf("regular") + 10, data.indexOf("original") - 3).replaceAll("\\\\", "");
+                                    imgDownload(imgUrl, directoryPath + "/" + illustId + "_" + "0");
+                                }
                             }
                         }
-                    }
-                    //多图，访问图片列表页
-                    else if (pageCount > 1) {
-                        String mangaContent = getPage(Constants.PIXIV_ILLUST_MANGA_URL + illustId);
-                        Document mangaDoc = Jsoup.parse(mangaContent);
-                        Elements mangaElements = mangaDoc.select("img[data-filter=manga-image]");
-                        mangaElements.forEach(element -> {
-                        });
-                        for (int i = 0; i < mangaElements.size(); i++) {
-                            Element mangaElement = mangaElements.get(i);
-                            imgDownload(mangaElement.attr("data-src"), directoryPath + "/" + illustId + "_" + mangaElement.attr("data-index"));
+                        //多图，访问图片列表页
+                        else if (pageCount > 1) {
+                            String mangaContent = getPage(Constants.PIXIV_ILLUST_MANGA_URL + illustId);
+                            Document mangaDoc = Jsoup.parse(mangaContent);
+                            Elements mangaElements = mangaDoc.select("img[data-filter=manga-image]");
+                            mangaElements.forEach(element -> {
+                            });
+                            for (int i = 0; i < mangaElements.size(); i++) {
+                                Element mangaElement = mangaElements.get(i);
+                                imgDownload(mangaElement.attr("data-src"), directoryPath + "/" + illustId + "_" + mangaElement.attr("data-index"));
+                            }
+                        } else {
+                            System.out.println("作品张数异常");
                         }
-                    } else {
-                        System.out.println("作品张数异常");
                     }
-                }
-                //作品为视频
-                else if (illustType.equals("2")) {
+                    //作品为视频
+                    else if (illustType.equals("2")) {
 
+                    }
                 }
             }
         });
@@ -222,6 +230,7 @@ public class PixivClient {
 
     /**
      * 根据url将图片下载到本地
+     *
      * @param url
      * @param filePathName
      */
@@ -258,17 +267,22 @@ public class PixivClient {
 
     /**
      * 判断是否还有下一页
+     *
      * @param responseContent
      * @return
      */
     public static boolean hasNextPage(String responseContent) {
         Document doc = Jsoup.parse(responseContent);
-        Elements elements = doc.select("a[title=继续]");
-        if (elements.size() == 1) {
+        Elements elementsZH= doc.select("a[title=继续]");
+        Elements elementsJP = doc.select("a[title=次へ]");
+        //可能是中文或者日文
+        if (elementsZH.size() == 1 || elementsJP.size() == 1) {
             System.out.println("有下一页");
             return true;
         } else {
             System.out.println("没有下一页");
+            System.out.println("共搜索出结果：" + doc.select(".count-badge").get(0).text());
+            System.out.println("过滤出的结果：" + filtedCount + "件");
             return false;
         }
     }
